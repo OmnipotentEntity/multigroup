@@ -15,7 +15,7 @@ use ndarray::{Array1, Array2, Axis, stack};
 // This program is intended to solve a 1D slab reactor with a reflector.
 // Using 2 group techniques
 
-const USAGE: &'static str = "
+const USAGE: &str = "
 Usage: multigroup <parameters.json> <core.json> <reflector.json>
 
 <parameters.json> is expect to be a path to JSON data of the following format:
@@ -117,21 +117,21 @@ fn make_vector_from_mix(core: &Array1<f64>, refl: &Array1<f64>, parameters: &Par
         for (i, gr) in group_res.iter_mut().enumerate() {
             // If we're completely in the domain of the reflector
             if i < (reflector_segments.round() as usize) {
-                gr = rgroup.clone();
+                *gr = *rgroup;
             // If we're in an overlap region between the reflector and the core
             } else if i == (reflector_segments.round() as usize) {
                 let reflp = reflector_segments - (i as f64) + 0.5;
-                gr = (rgroup * reflp + cgroup * (1.0 - reflp));
+                *gr = *rgroup * reflp + *cgroup * (1.0 - reflp);
             // If we're in the core
             } else if i < ((reflector_segments + core_segments).round() as usize) {
-                gr = cgroup.clone();
+                *gr = *cgroup;
             // If we're in the second overlap region
             } else if i == ((reflector_segments + core_segments).round() as usize) {
                 let corep = reflector_segments + core_segments - (i as f64) + 0.5;
-                gr = (cgroup * corep + rgroup * (1.0 - corep));
+                *gr = *cgroup * corep + *rgroup * (1.0 - corep);
             // Else, we're in the second reflector
             } else {
-                gr = rgroup.clone();
+                *gr = *rgroup;
             }
         }
         res = stack(Axis(0), &[res.view(), group_res.view()]).unwrap();
