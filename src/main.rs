@@ -30,24 +30,41 @@ Ref   Core   Ref
 <core.json> and <reflector.json> are expected to be paths to JSON data of the following format:
 
 {
-    \"sigma_tr\"   : [<macroscopic xsec in cm^-1 for group 1>, <same for group 2>],
-    \"sigma_a\"    : [<group 1>, <group 2>],
-    \"nu_sigma_f\" : [<group 1>, <group 2>],
-    \"chi\"        : [<probability to be created in group 1>, <group 2>],
-    \"sigma_s\"    : [[<macroscopic xsec in cm^-1 to scatter from group 1 to group 1>, <group 1 to group 2>],
-                  [<group 2 to group 1>, <group 2 to group 2>]]
+    \"sigma_tr\"   : {
+      \"v\" : 1,
+      \"dim\" : [<number of groups>],
+      \"data\" : [<comma separated list of macro xsec for each group, starting with group 1>]
+    },
+    \"sigma_a\"    : {
+      \"v\" : 1,
+      \"dim\" : [<number of groups>],
+      \"data\" : [<comma separated list of macro xsec for each group, starting with group 1>]
+    },
+    \"nu_sigma_f\" : {
+      \"v\" : 1,
+      \"dim\" : [<number of groups>],
+      \"data\" : [<comma separated list of macro xsec for each group, starting with group 1>]
+    },
+    \"chi\"        : {
+      \"v\" : 1,
+      \"dim\" : [<number of groups>],
+      \"data\" : [<comma separated list of probabilities for each group, starting with group 1>]
+    },
+    \"sigma_s\"    : {
+      \"v\" : 1,
+      \"dim\" : [<number of groups>, <number of groups>],
+      \"data\" : [<flattened matrix of macro xsec starting with group 1 to 1, then group 1 to 2 and so on>]
+    }
 }
 ";
 
-const GROUPS: usize = 2;
-
 #[derive(Serialize, Deserialize)]
 struct Material {
-    sigma_tr: [f64; GROUPS], // TODO: make this n-group
-    sigma_a: [f64; GROUPS],
-    nu_sigma_f: [f64; GROUPS],
-    chi: [f64; GROUPS],
-    sigma_s: [[f64; GROUPS]; GROUPS]
+    sigma_tr: ndarray::Array1<f64>,
+    sigma_a: ndarray::Array1<f64>,
+    nu_sigma_f: ndarray::Array1<f64>,
+    chi: ndarray::Array1<f64>,
+    sigma_s: ndarray::Array2<f64>
 }
 
 #[derive(Serialize, Deserialize)]
@@ -81,6 +98,11 @@ fn read_par_from_file<P: AsRef<Path>>(path: P) -> Result <Parameters, Box<Error>
     Ok(par)
 }
 
+// This function uses the parameters and the material 
+// fn make_vector_from_mix<P: AsRef<Parameters>>(mat_core: &[f64; 2], mat_refl: &[f64; 2], parameters: P) -> ndarray::Array2<f64> {
+//     let group1 = Array1::
+// }
+
 fn main() {
     // Read data from files
     let parameters_filename = env::args().nth(1).expect(USAGE);
@@ -94,11 +116,9 @@ fn main() {
     // Simple derived quantities
     let total_thickness = parameters.core_thickness + 2.0 * parameters.reflector_thickness;
     let delta = total_thickness / (parameters.num_segments as f64);
-    let core_segments = (parameters.core_thickness / delta).round() as u64;
-    let reflector_segments = (parameters.reflector_thickness / delta).round() as u64;
-
-    assert!(core_segments + 2 * reflector_segments == parameters.num_segments, "num_segments doesn't evenly divide the core and reflectors.");
 
     // Generate material data vectors
     // let sigma_a_core = Array::from_elem(
+    
+
 }
