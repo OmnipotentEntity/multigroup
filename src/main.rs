@@ -5,13 +5,14 @@ extern crate serde_json;
 extern crate serde_derive;
 
 extern crate ndarray;
+extern crate ndarray_linalg;
 
 use std::error::Error;
 use std::fs::File;
 use std::path::Path;
 use std::env;
 use std::iter::Iterator;
-use ndarray::{Array1, Array2, Array3, Axis, stack};
+use ndarray::{Array, Array1, Array2, Array3, Axis, stack};
 
 // This program is intended to solve a 1D slab reactor with a reflector.
 // Using 2 group techniques
@@ -21,6 +22,8 @@ Usage: multigroup <parameters.json> <core.json> <reflector.json>
 
 <parameters.json> is expect to be a path to JSON data of the following format:
 {
+    \"source_convergence\" : ratio for source convergence criteria,
+    \"criticality_convergence\" : ratio for criticality convergence criteria,
     \"core_thickness\" : core_thickness in cm,
     \"reflector_thickness\" : reflector_thickness in cm on either side of the core,
     \"num_segments\" : region thickness in cm
@@ -111,14 +114,14 @@ fn make_array_from_mix_impl(core: &f64, refl: &f64, gr: &mut f64, refl_seg: f64,
         *gr = *refl;
         // If we're in an overlap region between the reflector and the core
     } else if (i as f64) + 0.5 == refl_seg.round() - 0.5 {
-        let reflp = (refl_seg - (i as f64) - 0.5);
+        let reflp = refl_seg - (i as f64) - 0.5;
         *gr = refl * reflp + core * (1.0 - reflp);
         // If we're in the core
     } else if (i as f64) + 0.5 < (refl_seg + core_seg).round() - 0.5 {
         *gr = *core;
         // If we're in the second overlap region
     } else if (i as f64) + 0.5 == (refl_seg + core_seg).round() - 0.5 {
-        let corep = (refl_seg + core_seg - (i as f64) - 0.5);
+        let corep = refl_seg + core_seg - (i as f64) - 0.5;
         *gr = core * corep + refl * (1.0 - corep);
         // Else, we're in the second reflector
     } else {
@@ -170,6 +173,23 @@ fn make_array3_from_mix(core: &Array2<f64>, refl: &Array2<f64>, parameters: &Par
     res
 }
 
+fn update_source_from_flux(nu_sigma_f: &Array2<f64>, chi: &Array2<f64>, flux: &Array2<f64>, source: &mut Array2<f64>) {
+    // The formula for this is in LaTeX format is:
+    // S_i = \frac1{k} \chi_g \sum\limits_{g'} \frac1{8} \Delta \left( 3 \phi_i \left( \nu_{g'}
+    // \Sigma_{fg',i-1} + \nu_{g'} \Sigma_{fg',i} \right) + \nu_{g'} \Sigma_{fg',i-1}
+    // \phi_{i-1} + \nu_{g'} \Sigma_{fg',i} \phi_{i+1} \right)
+    //
+    // S_0 = \frac1{k} \chi_g \sum\limits_{g'} \frac1{8} \Delta \left( 3 \phi_i \nu_{g'}
+    // \Sigma_{fg',i} + \nu_{g'} \Sigma_{fg',i} \phi_{i+1} \right)
+    //
+    // S_N = \frac1{k} \chi_g \sum\limits_{g'} \frac1{8} \Delta \left( 3 \phi_i \nu_{g'}
+    // \Sigma_{fg',i-1} + \nu_{g'} \Sigma_{fg',i-1} \phi_{i-1} \right)
+    
+    for (i, loc_source) in source.iter_mut().enumerate() {
+        
+    }
+}
+
 fn main() {
     // Read data from files
     let parameters_filename = env::args().nth(1).expect(USAGE);
@@ -206,5 +226,20 @@ fn main() {
     let chi        = make_array2_from_mix(&core.chi,        &reflector.chi,        &parameters);
     let sigma_s    = make_array3_from_mix(&core.sigma_s,    &reflector.sigma_s,    &parameters);
 
-    println!("sigma_s: {}", sigma_s);
+    // Generate flat source and flux data
+
+    let mut source_history = Array::from_elem((sigma_tr.len_of(Axis(0)), sigma_tr.len_of(Axis(1)), 1), 1.0);
+    let mut flux_history   = Array::from_elem((sigma_tr.len_of(Axis(0)), sigma_tr.len_of(Axis(1)), 1), 1.0);
+
+    let mut source = Array::from_elem(sigma_tr.shape(), 1.0);
+    let mut flux   = Array::from_elem(sigma_tr.shape(), 1.0);
+
+    let mut iterations = 0;
+
+    // Finally a "do-while" loop in order to update source and flux until they converge
+    loop {
+        // First, update the source from the flux and such
+        
+        update_source_from_flux(nu_sigma_f, chi, flux, source);
+    }
 }
