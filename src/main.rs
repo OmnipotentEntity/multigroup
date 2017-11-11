@@ -107,18 +107,18 @@ fn make_array_from_mix_impl(core: &f64, refl: &f64, gr: &mut f64, refl_seg: f64,
     // messier and it's an edge case.
 
     // If we're completely in the domain of the reflector
-    if i < (refl_seg.round() as usize) {
+    if (i as f64) + 0.5 < refl_seg.round() - 0.5 {
         *gr = *refl;
         // If we're in an overlap region between the reflector and the core
-    } else if i == (refl_seg.round() as usize) {
-        let reflp = refl_seg - (i as f64) + 0.5;
+    } else if (i as f64) + 0.5 == refl_seg.round() - 0.5 {
+        let reflp = (refl_seg - (i as f64) - 0.5);
         *gr = refl * reflp + core * (1.0 - reflp);
         // If we're in the core
-    } else if i < ((refl_seg + core_seg).round() as usize) {
+    } else if (i as f64) + 0.5 < (refl_seg + core_seg).round() - 0.5 {
         *gr = *core;
         // If we're in the second overlap region
-    } else if i == ((refl_seg + core_seg).round() as usize) {
-        let corep = refl_seg + core_seg - (i as f64) + 0.5;
+    } else if (i as f64) + 0.5 == (refl_seg + core_seg).round() - 0.5 {
+        let corep = (refl_seg + core_seg - (i as f64) - 0.5);
         *gr = core * corep + refl * (1.0 - corep);
         // Else, we're in the second reflector
     } else {
@@ -206,5 +206,5 @@ fn main() {
     let chi        = make_array2_from_mix(&core.chi,        &reflector.chi,        &parameters);
     let sigma_s    = make_array3_from_mix(&core.sigma_s,    &reflector.sigma_s,    &parameters);
 
-    println!("sigma_tr: {}", sigma_tr);
+    println!("sigma_s: {}", sigma_s);
 }
