@@ -237,8 +237,8 @@ fn update_source_from_flux(reactor_data: &ReactorParameters, flux: &Array2<f64>,
     }
 }
 
-fn update_flux_from_source(reactor_data: &ReactorParameters, flux: &mut Array2<f64>, source: &Array2<f64>, delta: f64) {
-
+fn make_flux_from_source(reactor_data: &ReactorParameters, flux: &Array2<f64>, source: &Array2<f64>, delta: f64) -> Array2<f64> {
+    //
 }
 
 fn main() {
@@ -296,12 +296,18 @@ fn main() {
 
     // Finally a "do-while" loop in order to update source and flux until they converge
     loop {
-        // First, update the source from the flux and such
-        
+        // First, update the source from the flux
         update_source_from_flux(&reactor_data, &flux, &mut source, delta);
         let source_to_save = source.clone().into_shape(arr3shape).unwrap();
         source_history = stack(Axis(2), &[source_history.view(), source_to_save.view()]).unwrap();
 
-        update_flux_from_source(&reactor_data, &mut flux, &source, delta);
+        // Next, update the flux from the source.
+        // This one does not modify in place because we have to reference flux from other groups
+        // in order to calculate the flux of a single group.  So we have to keep all data around
+        // until we're completely done with it.
+        let new_flux = make_flux_from_source(&reactor_data, &flux, &source, delta);
+        let new_flux_to_save = flux.clone().into_shape(arr3shape).unwrap();
+        flux_history = stack(Axis(2), &[flux_history.view(),new_flux_to_save.view()]).unwrap();
+        flux = new_flux;
     }
 }
