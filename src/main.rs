@@ -12,10 +12,14 @@ use std::fs::File;
 use std::path::Path;
 use std::env;
 use std::iter::Iterator;
-use ndarray::{Array, Array1, Array2, Array3, Axis, stack};
+use ndarray::{Array, Array1, Array2, Array3, ArrayView, Axis, Shape, stack};
 
 // This program is intended to solve a 1D slab reactor with a reflector.
 // Using 2 group techniques
+
+const GROUPERR: &str = "Number of groups must be the same for all xsecs";
+const COREERR: &str = "Core thickness must be positive.";
+const REFLERR: &str = "Reflector thickness must be positive.";
 
 const USAGE: &str = "
 Usage: multigroup <parameters.json> <core.json> <reflector.json>
@@ -40,7 +44,7 @@ Ref   Core   Ref
       \"dim\" : [<number of groups>],
       \"data\" : [<comma separated list of macro xsec for each group, starting with group 1>]
     },
-    \"sigma_r\"    : {
+    \"sigma_a\"    : {
       \"v\" : 1,
       \"dim\" : [<number of groups>],
       \"data\" : [<comma separated list of macro xsec for each group, starting with group 1>]
@@ -66,7 +70,7 @@ Ref   Core   Ref
 #[derive(Serialize, Deserialize)]
 struct Material {
     sigma_tr: Array1<f64>,
-    sigma_r: Array1<f64>,
+    sigma_a: Array1<f64>,
     nu_sigma_f: Array1<f64>,
     chi: Array1<f64>,
     sigma_s: Array2<f64>
@@ -77,6 +81,14 @@ struct Parameters {
     core_thickness: f64,
     reflector_thickness: f64,
     num_segments: usize
+}
+
+struct ReactorParameters {
+    sigma_tr: Array2<f64>,
+    sigma_a: Array2<f64>,
+    nu_sigma_f: Array2<f64>,
+    chi: Array2<f64>,
+    sigma_s: Array3<f64>
 }
 
 // Reads json data from a file and parses it into a Material struct
@@ -173,7 +185,7 @@ fn make_array3_from_mix(core: &Array2<f64>, refl: &Array2<f64>, parameters: &Par
     res
 }
 
-fn update_source_from_flux(nu_sigma_f: &Array2<f64>, chi: &Array2<f64>, flux: &Array2<f64>, source: &mut Array2<f64>) {
+fn update_source_from_flux(reactor_data: &ReactorParameters, flux: &Array2<f64>, source: &mut Array2<f64>, delta: f64) {
     // The formula for this is in LaTeX format is:
     // S_i = \frac1{k} \chi_g \sum\limits_{g'} \frac1{8} \Delta \left( 3 \phi_i \left( \nu_{g'}
     // \Sigma_{fg',i-1} + \nu_{g'} \Sigma_{fg',i} \right) + \nu_{g'} \Sigma_{fg',i-1}
@@ -184,10 +196,49 @@ fn update_source_from_flux(nu_sigma_f: &Array2<f64>, chi: &Array2<f64>, flux: &A
     //
     // S_N = \frac1{k} \chi_g \sum\limits_{g'} \frac1{8} \Delta \left( 3 \phi_i \nu_{g'}
     // \Sigma_{fg',i-1} + \nu_{g'} \Sigma_{fg',i-1} \phi_{i-1} \right)
-    
+
+    let groups = source.len_of(Axis(0));
+    let segments: usize = source.strides()[0] as usize;
+
     for (i, loc_source) in source.iter_mut().enumerate() {
-        
+        let left_contrib: f64;
+        let segment_id = i % segments;
+        let group_id = i / segments;
+        if (segment_id != 0) {
+            // S_N only has left contrib, so this is essentially the S_N formula
+            let mut sum = 0.0;
+            for group in (0..groups) {
+                sum += 3.0 * flux[[group, segment_id]]     * reactor_data.nu_sigma_f[[group, segment_id - 1]]
+                           + flux[[group, segment_id - 1]] * reactor_data.nu_sigma_f[[group, segment_id - 1]];
+            }
+            left_contrib = sum * delta / 8.0;
+
+        } else {
+            left_contrib = 0.0;
+        }
+
+        let right_contrib: f64;
+        if (segment_id != segments - 1) {
+            // S_0 only has left contrib, so this is essentially the S_N formula
+            let mut sum = 0.0;
+            for group in (0..groups) {
+                sum += 3.0 * flux[[group, segment_id]] * reactor_data.nu_sigma_f[[group, segment_id]]
+                           + flux[[group, segment_id]] * reactor_data.nu_sigma_f[[group, segment_id + 1]];
+            }
+            right_contrib = sum * delta / 8.0;
+
+        } else {
+            right_contrib = 0.0;
+        }
+
+        // And then we just add up the contributions, and multiply by the group constant. The 1/k
+        // constant will need to be multiplied later, as it must be calculated using this source.
+        *loc_source = reactor_data.chi[[group_id, segment_id]] * (left_contrib + right_contrib);
     }
+}
+
+fn update_flux_from_source(reactor_data: &ReactorParameters, flux: &mut Array2<f64>, source: &Array2<f64>, delta: f64) {
+
 }
 
 fn main() {
@@ -201,19 +252,19 @@ fn main() {
     let reflector = read_mat_from_file(&reflector_filename).unwrap();
 
     // Double check data for sanity
-    assert!(parameters.core_thickness > 0.0, "Core thickness must be positive.");
-    assert!(parameters.reflector_thickness > 0.0, "Reflector thickness must be positive.");
-    assert!(core.sigma_tr.len() == core.sigma_r.len(), "Number of groups must be the same for all xsecs");
-    assert!(core.sigma_tr.len() == core.nu_sigma_f.len(), "Number of groups must be the same for all xsecs");
-    assert!(core.sigma_tr.len() == core.chi.len(), "Number of groups must be the same for all xsecs");
-    assert!(core.sigma_tr.len() == core.sigma_s.len_of(Axis(0)), "Number of groups must be the same for all xsecs");
-    assert!(core.sigma_tr.len() == core.sigma_s.len_of(Axis(1)), "Number of groups must be the same for all xsecs");
-    assert!(core.sigma_tr.len() == reflector.sigma_tr.len(), "Number of groups must be the same for all xsecs");
-    assert!(core.sigma_tr.len() == reflector.sigma_r.len(), "Number of groups must be the same for all xsecs");
-    assert!(core.sigma_tr.len() == reflector.nu_sigma_f.len(), "Number of groups must be the same for all xsecs");
-    assert!(core.sigma_tr.len() == reflector.chi.len(), "Number of groups must be the same for all xsecs");
-    assert!(core.sigma_tr.len() == reflector.sigma_s.len_of(Axis(0)), "Number of groups must be the same for all xsecs");
-    assert!(core.sigma_tr.len() == reflector.sigma_s.len_of(Axis(1)), "Number of groups must be the same for all xsecs");
+    assert!(parameters.core_thickness > 0.0, COREERR);
+    assert!(parameters.reflector_thickness > 0.0, REFLERR);
+    assert!(core.sigma_tr.len() == core.sigma_a.len(), GROUPERR);
+    assert!(core.sigma_tr.len() == core.nu_sigma_f.len(), GROUPERR);
+    assert!(core.sigma_tr.len() == core.chi.len(), GROUPERR);
+    assert!(core.sigma_tr.len() == core.sigma_s.len_of(Axis(0)), GROUPERR);
+    assert!(core.sigma_tr.len() == core.sigma_s.len_of(Axis(1)), GROUPERR);
+    assert!(core.sigma_tr.len() == reflector.sigma_tr.len(), GROUPERR);
+    assert!(core.sigma_tr.len() == reflector.sigma_a.len(), GROUPERR);
+    assert!(core.sigma_tr.len() == reflector.nu_sigma_f.len(), GROUPERR);
+    assert!(core.sigma_tr.len() == reflector.chi.len(), GROUPERR);
+    assert!(core.sigma_tr.len() == reflector.sigma_s.len_of(Axis(0)), GROUPERR);
+    assert!(core.sigma_tr.len() == reflector.sigma_s.len_of(Axis(1)), GROUPERR);
 
     // Simple derived quantities
     let total_thickness = parameters.core_thickness + 2.0 * parameters.reflector_thickness;
@@ -221,25 +272,36 @@ fn main() {
 
     // Generate material data vectors
     let sigma_tr   = make_array2_from_mix(&core.sigma_tr,   &reflector.sigma_tr,   &parameters);
-    let sigma_r    = make_array2_from_mix(&core.sigma_r,    &reflector.sigma_r,    &parameters);
+    let sigma_a    = make_array2_from_mix(&core.sigma_a,    &reflector.sigma_a,    &parameters);
     let nu_sigma_f = make_array2_from_mix(&core.nu_sigma_f, &reflector.nu_sigma_f, &parameters);
     let chi        = make_array2_from_mix(&core.chi,        &reflector.chi,        &parameters);
     let sigma_s    = make_array3_from_mix(&core.sigma_s,    &reflector.sigma_s,    &parameters);
+    let arr3shape = (sigma_tr.len_of(Axis(0)), sigma_tr.len_of(Axis(1)), 1);
 
     // Generate flat source and flux data
 
-    let mut source_history = Array::from_elem((sigma_tr.len_of(Axis(0)), sigma_tr.len_of(Axis(1)), 1), 1.0);
-    let mut flux_history   = Array::from_elem((sigma_tr.len_of(Axis(0)), sigma_tr.len_of(Axis(1)), 1), 1.0);
+    let mut criticality_history = Array::from_elem((1), 1.0);
+    let mut source_history = Array::from_elem(arr3shape, 1.0);
+    let mut flux_history   = Array::from_elem(arr3shape, 1.0);
 
-    let mut source = Array::from_elem(sigma_tr.shape(), 1.0);
-    let mut flux   = Array::from_elem(sigma_tr.shape(), 1.0);
+    let mut criticality = 1.0;
+    let mut source: Array2<f64> = Array::from_elem(sigma_tr.dim(), 1.0);
+    let mut flux:   Array2<f64> = Array::from_elem(sigma_tr.dim(), 1.0);
 
     let mut iterations = 0;
+    
+    let reactor_data = ReactorParameters{sigma_tr, sigma_a, nu_sigma_f, chi, sigma_s};
+
+    println!("{}", source.len_of(Axis(0)));
 
     // Finally a "do-while" loop in order to update source and flux until they converge
     loop {
         // First, update the source from the flux and such
         
-        update_source_from_flux(nu_sigma_f, chi, flux, source);
+        update_source_from_flux(&reactor_data, &flux, &mut source, delta);
+        let source_to_save = source.clone().into_shape(arr3shape).unwrap();
+        source_history = stack(Axis(2), &[source_history.view(), source_to_save.view()]).unwrap();
+
+        update_flux_from_source(&reactor_data, &mut flux, &source, delta);
     }
 }
