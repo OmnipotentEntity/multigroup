@@ -4,6 +4,7 @@ extern crate serde_json;
 #[macro_use]
 extern crate serde_derive;
 
+#[macro_use]
 extern crate ndarray;
 extern crate ndarray_linalg;
 
@@ -86,6 +87,7 @@ struct Parameters {
 struct ReactorParameters {
     sigma_tr: Array2<f64>,
     sigma_a: Array2<f64>,
+    sigma_r: Array2<f64>,
     nu_sigma_f: Array2<f64>,
     chi: Array2<f64>,
     sigma_s: Array3<f64>
@@ -122,18 +124,18 @@ fn make_array_from_mix_impl(core: &f64, refl: &f64, gr: &mut f64, refl_seg: f64,
     // messier and it's an edge case.
 
     // If we're completely in the domain of the reflector
-    if (i as f64) + 0.5 < refl_seg.round() - 0.5 {
+    if (i as f64) + 0.5 < refl_seg.round() + 0.5 {
         *gr = *refl;
         // If we're in an overlap region between the reflector and the core
-    } else if (i as f64) + 0.5 == refl_seg.round() - 0.5 {
-        let reflp = refl_seg - (i as f64) - 0.5;
+    } else if (i as f64) + 0.5 == refl_seg.round() + 0.5 {
+        let reflp = refl_seg - (i as f64) + 0.5;
         *gr = refl * reflp + core * (1.0 - reflp);
         // If we're in the core
-    } else if (i as f64) + 0.5 < (refl_seg + core_seg).round() - 0.5 {
+    } else if (i as f64) + 0.5 < (refl_seg + core_seg).round() + 0.5 {
         *gr = *core;
         // If we're in the second overlap region
-    } else if (i as f64) + 0.5 == (refl_seg + core_seg).round() - 0.5 {
-        let corep = refl_seg + core_seg - (i as f64) - 0.5;
+    } else if (i as f64) + 0.5 == (refl_seg + core_seg).round() + 0.5 {
+        let corep = refl_seg + core_seg - (i as f64) + 0.5;
         *gr = core * corep + refl * (1.0 - corep);
         // Else, we're in the second reflector
     } else {
@@ -145,7 +147,7 @@ fn make_array_from_mix_impl(core: &f64, refl: &f64, gr: &mut f64, refl_seg: f64,
 // specific physical property, each row is a single group.
 fn make_array2_from_mix(core: &Array1<f64>, refl: &Array1<f64>, parameters: &Parameters) -> Array2<f64> {
     let total_thickness = parameters.core_thickness + 2.0 * parameters.reflector_thickness;
-    let delta = total_thickness / (parameters.num_segments as f64);
+    let delta = total_thickness / ((parameters.num_segments - 1) as f64);
     let core_segments = parameters.core_thickness / delta;
     let reflector_segments = parameters.reflector_thickness / delta;
 
@@ -164,7 +166,7 @@ fn make_array2_from_mix(core: &Array1<f64>, refl: &Array1<f64>, parameters: &Par
 
 fn make_array3_from_mix(core: &Array2<f64>, refl: &Array2<f64>, parameters: &Parameters) -> Array3<f64> {
     let total_thickness = parameters.core_thickness + 2.0 * parameters.reflector_thickness;
-    let delta = total_thickness / (parameters.num_segments as f64);
+    let delta = total_thickness / ((parameters.num_segments - 1) as f64);
     let core_segments = parameters.core_thickness / delta;
     let reflector_segments = parameters.reflector_thickness / delta;
 
@@ -185,15 +187,24 @@ fn make_array3_from_mix(core: &Array2<f64>, refl: &Array2<f64>, parameters: &Par
     res
 }
 
-fn update_source_from_flux(reactor_data: &ReactorParameters, flux: &Array2<f64>, source: &mut Array2<f64>, delta: f64) {
+fn gen_sigma_r(sigma_a: &Array2<f64>, sigma_s: &Array3<f64>) -> Array2<f64> {
+    // \Sigma_r = \Sigma_a + \sum\limits_{g' \ne g} \Sigma_s
+
+    Array::from_shape_fn(sigma_a.dim(),
+        |(i, j)| sigma_a[(i, j)] +
+                 sigma_s.slice(s![i as isize..(i+1) as isize, .., j as isize..(j+1) as isize])
+                    .fold(0.0, |sum, curr| sum + curr) - sigma_s[(i, i, j)])
+}
+
+fn update_source_from_flux(reactor: &ReactorParameters, flux: &Array2<f64>, source: &mut Array2<f64>, delta: f64) {
     // The formula for this is in LaTeX format is:
     // S_i = \frac1{k} \chi_g \sum\limits_{g'} \frac1{8} \Delta \left( 3 \phi_i \left( \nu_{g'}
     // \Sigma_{fg',i-1} + \nu_{g'} \Sigma_{fg',i} \right) + \nu_{g'} \Sigma_{fg',i-1}
     // \phi_{i-1} + \nu_{g'} \Sigma_{fg',i} \phi_{i+1} \right)
-    //
+
     // S_0 = \frac1{k} \chi_g \sum\limits_{g'} \frac1{8} \Delta \left( 3 \phi_i \nu_{g'}
     // \Sigma_{fg',i} + \nu_{g'} \Sigma_{fg',i} \phi_{i+1} \right)
-    //
+
     // S_N = \frac1{k} \chi_g \sum\limits_{g'} \frac1{8} \Delta \left( 3 \phi_i \nu_{g'}
     // \Sigma_{fg',i-1} + \nu_{g'} \Sigma_{fg',i-1} \phi_{i-1} \right)
 
@@ -208,8 +219,8 @@ fn update_source_from_flux(reactor_data: &ReactorParameters, flux: &Array2<f64>,
             // S_N only has left contrib, so this is essentially the S_N formula
             let mut sum = 0.0;
             for group in (0..groups) {
-                sum += 3.0 * flux[[group, segment_id]]     * reactor_data.nu_sigma_f[[group, segment_id - 1]]
-                           + flux[[group, segment_id - 1]] * reactor_data.nu_sigma_f[[group, segment_id - 1]];
+                sum += 3.0 * flux[[group, segment_id]]     * reactor.nu_sigma_f[[group, segment_id - 1]]
+                           + flux[[group, segment_id - 1]] * reactor.nu_sigma_f[[group, segment_id - 1]];
             }
             left_contrib = sum * delta / 8.0;
 
@@ -222,8 +233,8 @@ fn update_source_from_flux(reactor_data: &ReactorParameters, flux: &Array2<f64>,
             // S_0 only has left contrib, so this is essentially the S_N formula
             let mut sum = 0.0;
             for group in (0..groups) {
-                sum += 3.0 * flux[[group, segment_id]] * reactor_data.nu_sigma_f[[group, segment_id]]
-                           + flux[[group, segment_id]] * reactor_data.nu_sigma_f[[group, segment_id + 1]];
+                sum += 3.0 * flux[[group, segment_id]] * reactor.nu_sigma_f[[group, segment_id]]
+                           + flux[[group, segment_id]] * reactor.nu_sigma_f[[group, segment_id + 1]];
             }
             right_contrib = sum * delta / 8.0;
 
@@ -233,12 +244,66 @@ fn update_source_from_flux(reactor_data: &ReactorParameters, flux: &Array2<f64>,
 
         // And then we just add up the contributions, and multiply by the group constant. The 1/k
         // constant will need to be multiplied later, as it must be calculated using this source.
-        *loc_source = reactor_data.chi[[group_id, segment_id]] * (left_contrib + right_contrib);
+        *loc_source = reactor.chi[[group_id, segment_id]] * (left_contrib + right_contrib);
     }
 }
 
-fn make_flux_from_source(reactor_data: &ReactorParameters, flux: &Array2<f64>, source: &Array2<f64>, delta: f64) -> Array2<f64> {
-    //
+fn make_flux_from_source(reactor: &ReactorParameters, flux: &Array2<f64>, source: &Array2<f64>, delta: f64) -> (f64, Array2<f64>) {
+    // The formula for this in LaTeX format is:
+    // \left(\frac{D_i + D_{i-1}}{\Delta}\right)\phi_i - \frac{D_{i-1}}{\Delta}\phi_{i-1} -
+    // \frac{D_i}{\Delta}\phi_{i+1} + \frac1{8}\Delta\left(3\phi_i \left(\Sigma_{r,i-1} +
+    // \Sigma_{r,i}\right)\right) + \Sigma_{r,i-1}\phi_{i-1} + \Sigma_{r,i}\phi_{i+1} = \left(
+    // \frac{S_{i-1} + S_i}{2} \right) \Delta + \sum\limits_{g' \ne g} \left(\frac1{8} \Delta
+    // \left(3 \phi_{g',i} \left(\Sigma_{sg'g,i-1} + \Sigma_{sg'g,i}\right)\right) +
+    // \Sigma_{sg'g,i-1}\phi_{g',i-1} + \Sigma_{sg'g,i}\phi_{g',i+1}\right)
+
+    // Where S_i is the source given by the previous formula.
+
+    // This formula is already split from left to right with thing that depend on the current value
+    // of \phi in this group.  Meaning it is possible to solve this system of equations for the
+    // current value of \phi.
+
+    // However, if the reactor is super critical or sub critical we get an exponential flux
+    // increase or decrease.  So at the end we total up the old flux and new flux and renormalize.
+    // This value is the inverse of the criticality, and this is of interest so we also return it.
+
+    let mut res = flux.clone();
+    let crit = 1.0;
+
+    let groups = source.len_of(Axis(0));
+    let segments: usize = source.strides()[0] as usize;
+
+    (crit, res)
+}
+
+fn make_group_matrices(reactor: &ReactorParameters) -> Array3<f64> {
+    // In order to solve the system of equations we'll be solving it using a matrix inverse.  So
+    // first we need to construct the matrix.
+    // [[ b_0 c_0   0 ...   0]
+    //  [ a_1 b_1 c_1 ...   0]
+    //  [   0 a_2 b_2 ...   0]
+    //  ...
+    //  [   0   0   0 ... b_N]]
+
+    // Where:
+    // a_i = \frac1{8}\Delta\Sigma_{r,i-1} - \frac{D_{i-1}}{\Delta}
+    // b_i = \frac{3}{8}\Delta(\Sigma{r,i-1} + \Sigma{r,i}) + \frac{D_{i-1} + D_i}{\Delta}
+    // c_i = \frac1{8}\Delta\Sigma_{r,i} - \frac{D_{i}}{\Delta}
+    // Each being the components multiplied by \phi_{i-1}, \phi{i} and \phi{i+1} respectively.
+
+    let mut res: Array3<f64> = Array::zeros(
+        (reactor.sigma_tr.len_of(Axis(0)), 
+         reactor.sigma_tr.len_of(Axis(0)), 
+         reactor.sigma_tr.len_of(Axis(1))));
+
+    for group in res.axis_iter_mut(Axis(2)) {
+        // group[[0,0]] = reactor.
+        // for i in (0..group.len_of(Axis(0))) {
+
+        // }
+    }
+
+    res
 }
 
 fn main() {
@@ -268,7 +333,7 @@ fn main() {
 
     // Simple derived quantities
     let total_thickness = parameters.core_thickness + 2.0 * parameters.reflector_thickness;
-    let delta = total_thickness / (parameters.num_segments as f64);
+    let delta = total_thickness / ((parameters.num_segments - 1) as f64);
 
     // Generate material data vectors
     let sigma_tr   = make_array2_from_mix(&core.sigma_tr,   &reflector.sigma_tr,   &parameters);
@@ -276,6 +341,7 @@ fn main() {
     let nu_sigma_f = make_array2_from_mix(&core.nu_sigma_f, &reflector.nu_sigma_f, &parameters);
     let chi        = make_array2_from_mix(&core.chi,        &reflector.chi,        &parameters);
     let sigma_s    = make_array3_from_mix(&core.sigma_s,    &reflector.sigma_s,    &parameters);
+    let sigma_r    = gen_sigma_r(&sigma_a, &sigma_s);
     let arr3shape = (sigma_tr.len_of(Axis(0)), sigma_tr.len_of(Axis(1)), 1);
 
     // Generate flat source and flux data
@@ -284,30 +350,27 @@ fn main() {
     let mut source_history = Array::from_elem(arr3shape, 1.0);
     let mut flux_history   = Array::from_elem(arr3shape, 1.0);
 
-    let mut criticality = 1.0;
     let mut source: Array2<f64> = Array::from_elem(sigma_tr.dim(), 1.0);
     let mut flux:   Array2<f64> = Array::from_elem(sigma_tr.dim(), 1.0);
 
     let mut iterations = 0;
-    
-    let reactor_data = ReactorParameters{sigma_tr, sigma_a, nu_sigma_f, chi, sigma_s};
 
-    println!("{}", source.len_of(Axis(0)));
+    let reactor = ReactorParameters{sigma_tr, sigma_a, sigma_r, nu_sigma_f, chi, sigma_s};
 
     // Finally a "do-while" loop in order to update source and flux until they converge
-    loop {
-        // First, update the source from the flux
-        update_source_from_flux(&reactor_data, &flux, &mut source, delta);
-        let source_to_save = source.clone().into_shape(arr3shape).unwrap();
-        source_history = stack(Axis(2), &[source_history.view(), source_to_save.view()]).unwrap();
+    // loop {
+    //     // First, update the source from the flux
+    //     update_source_from_flux(&reactor, &flux, &mut source, delta);
+    //     let source_to_save = source.clone().into_shape(arr3shape).unwrap();
+    //     source_history = stack(Axis(2), &[source_history.view(), source_to_save.view()]).unwrap();
 
-        // Next, update the flux from the source.
-        // This one does not modify in place because we have to reference flux from other groups
-        // in order to calculate the flux of a single group.  So we have to keep all data around
-        // until we're completely done with it.
-        let new_flux = make_flux_from_source(&reactor_data, &flux, &source, delta);
-        let new_flux_to_save = flux.clone().into_shape(arr3shape).unwrap();
-        flux_history = stack(Axis(2), &[flux_history.view(),new_flux_to_save.view()]).unwrap();
-        flux = new_flux;
-    }
+    //     // Next, update the flux from the source.
+    //     // This one does not modify in place because we have to reference flux from other groups
+    //     // in order to calculate the flux of a single group.  So we have to keep all data around
+    //     // until we're completely done with it.
+    //     let (criticality, new_flux) = make_flux_from_source(&reactor, &flux, &source, delta);
+    //     let new_flux_to_save = flux.clone().into_shape(arr3shape).unwrap();
+    //     flux_history = stack(Axis(2), &[flux_history.view(),new_flux_to_save.view()]).unwrap();
+    //     flux = new_flux;
+    // }
 }

@@ -3,5 +3,5 @@
     "criticality_convergence" : 0.0001,
     "core_thickness" : 300,
     "reflector_thickness" : 20,
-    "num_segments" : 3400
+    "num_segments" : 3401
 }
