@@ -314,7 +314,7 @@ fn make_flux_from_source(reactor: &ReactorParameters, flux: &Array2<f64>, source
             let left_flux = flux.subview(Axis(1), segment_id-1);
             let center_flux = flux.subview(Axis(1), segment_id);
 
-            left_contrib = left_source + delta * 
+            left_contrib = left_source + delta *
                 (0.375 * sum_over_g_ne_g(left_inscatter, center_flux) +
                  0.125 * sum_over_g_ne_g(left_inscatter, left_flux));
         } else {
@@ -329,7 +329,7 @@ fn make_flux_from_source(reactor: &ReactorParameters, flux: &Array2<f64>, source
             let center_flux = flux.subview(Axis(1), segment_id);
             let right_flux = flux.subview(Axis(1), segment_id+1);
 
-            right_contrib = center_source + delta * 
+            right_contrib = center_source + delta *
                 (0.375 * sum_over_g_ne_g(center_inscatter, center_flux) +
                  0.125 * sum_over_g_ne_g(center_inscatter, right_flux));
         } else {
@@ -381,8 +381,8 @@ fn make_group_matrices(reactor: &ReactorParameters, delta: f64) -> Array3<f64> {
     // needs to be calculated once.
 
     let mut res: Array3<f64> = Array::zeros(
-        (reactor.sigma_tr.len_of(Axis(0)), 
-         reactor.sigma_tr.len_of(Axis(1)), 
+        (reactor.sigma_tr.len_of(Axis(0)),
+         reactor.sigma_tr.len_of(Axis(1)),
          reactor.sigma_tr.len_of(Axis(1))));
 
     let b_lr_contrib = |tr, a, r| 0.375 * r + 1.0 / (3.0 * (tr + a) * delta) + 0.5;
@@ -530,8 +530,8 @@ fn main() {
     println!("----------");
 
     println!("{}", source_history);
-    
+
     println!("----------");
-    
+
     println!("{}", flux_history);
 }
