@@ -1,3 +1,6 @@
+#![cfg_attr(feature="clippy", feature(plugin))]
+#![cfg_attr(feature="clippy", plugin(clippy))]
+
 extern crate serde;
 extern crate serde_json;
 
@@ -127,18 +130,20 @@ fn make_array_from_mix_impl(core: &f64, refl: &f64, gr: &mut f64, refl_seg: f64,
     // the very first or very last section.  I could put it in, but then the code would be even
     // messier and it's an edge case.
 
+    let error = 1e-5;
+
     // If we're completely in the domain of the reflector
     if (i as f64) + 0.5 < refl_seg.round() + 0.5 {
         *gr = *refl;
         // If we're in an overlap region between the reflector and the core
-    } else if (i as f64) + 0.5 == refl_seg.round() + 0.5 {
+    } else if (((i as f64) + 0.5) - (refl_seg.round() + 0.5)).abs() < error {
         let reflp = refl_seg - (i as f64) + 0.5;
         *gr = refl * reflp + core * (1.0 - reflp);
         // If we're in the core
     } else if (i as f64) + 0.5 < (refl_seg + core_seg).round() + 0.5 {
         *gr = *core;
         // If we're in the second overlap region
-    } else if (i as f64) + 0.5 == (refl_seg + core_seg).round() + 0.5 {
+    } else if (((i as f64) + 0.5) - ((refl_seg + core_seg).round() + 0.5)).abs() < error {
         let corep = refl_seg + core_seg - (i as f64) + 0.5;
         *gr = core * corep + refl * (1.0 - corep);
         // Else, we're in the second reflector
@@ -216,35 +221,34 @@ fn update_source_from_flux(reactor: &ReactorParameters, flux: &Array2<f64>, sour
     let segments = source.len_of(Axis(1));
 
     for (i, loc_source) in source.iter_mut().enumerate() {
-        let left_contrib: f64;
         let segment_id = i % segments;
         let group_id = i / segments;
-        if segment_id != 0 {
+
+        let left_contrib: f64 = if segment_id != 0 {
             // S_N only has left contrib, so this is essentially the S_N formula
             let mut sum = 0.0;
             for group in 0..groups {
                 sum += 3.0 * flux[(group, segment_id)]     * reactor.nu_sigma_f[(group, segment_id - 1)]
                            + flux[(group, segment_id - 1)] * reactor.nu_sigma_f[(group, segment_id - 1)]
             }
-            left_contrib = sum * delta / 8.0;
+            sum * delta / 8.0
 
         } else {
-            left_contrib = 0.0;
-        }
+            0.0
+        };
 
-        let right_contrib: f64;
-        if segment_id != segments - 1 {
+        let right_contrib: f64 = if segment_id != segments - 1 {
             // S_0 only has left contrib, so this is essentially the S_N formula
             let mut sum = 0.0;
             for group in 0..groups {
                 sum += 3.0 * flux[(group, segment_id)] * reactor.nu_sigma_f[(group, segment_id)]
                            + flux[(group, segment_id)] * reactor.nu_sigma_f[(group, segment_id + 1)]
             }
-            right_contrib = sum * delta / 8.0;
+            sum * delta / 8.0
 
         } else {
-            right_contrib = 0.0;
-        }
+            0.0
+        };
 
         // And then we just add up the contributions, and multiply by the group constant. The 1/k
         // constant will need to be multiplied later, as it must be calculated using this source.
@@ -298,7 +302,6 @@ fn make_flux_from_source(reactor: &ReactorParameters, flux: &Array2<f64>, source
 
         // With d_{r,i} being the remaining terms.
 
-        let left_contrib: f64;
         let segment_id = i % segments;
         let group_id = i / segments;
 
@@ -307,34 +310,33 @@ fn make_flux_from_source(reactor: &ReactorParameters, flux: &Array2<f64>, source
                 .fold(0.0, |sum, (f, i)| sum + f * i)
             - inscatter[group_id] * flux[group_id];
 
-        if segment_id != 0 {
+        let left_contrib: f64 = if segment_id != 0 {
             let left_source = source[(group_id, segment_id - 1)] * delta / 2.0;
             let left_inscatter = reactor.sigma_s.subview(Axis(1), group_id);
             let left_inscatter = left_inscatter.subview(Axis(1), segment_id-1);
             let left_flux = flux.subview(Axis(1), segment_id-1);
             let center_flux = flux.subview(Axis(1), segment_id);
 
-            left_contrib = left_source + delta *
+            left_source + delta *
                 (0.375 * sum_over_g_ne_g(left_inscatter, center_flux) +
-                 0.125 * sum_over_g_ne_g(left_inscatter, left_flux));
+                 0.125 * sum_over_g_ne_g(left_inscatter, left_flux))
         } else {
-            left_contrib = 0.0;
-        }
+            0.0
+        };
 
-        let right_contrib: f64;
-        if segment_id != segments - 1 {
+        let right_contrib: f64 = if segment_id != segments - 1 {
             let center_source = source[(group_id, segment_id)] * delta / 2.0;
             let center_inscatter = reactor.sigma_s.subview(Axis(1), group_id);
             let center_inscatter = center_inscatter.subview(Axis(1), segment_id);
             let center_flux = flux.subview(Axis(1), segment_id);
             let right_flux = flux.subview(Axis(1), segment_id+1);
 
-            right_contrib = center_source + delta *
+            center_source + delta *
                 (0.375 * sum_over_g_ne_g(center_inscatter, center_flux) +
-                 0.125 * sum_over_g_ne_g(center_inscatter, right_flux));
+                 0.125 * sum_over_g_ne_g(center_inscatter, right_flux))
         } else {
-            right_contrib = 0.0;
-        }
+            0.0
+        };
 
         d_groups[(group_id, segment_id)] = left_contrib + right_contrib;
     }
@@ -356,7 +358,7 @@ fn make_flux_from_source(reactor: &ReactorParameters, flux: &Array2<f64>, source
     // And normalize
 
     for i in new_flux.iter_mut() {
-        *i = *i / crit;
+        *i /= crit;
     }
 
     (crit, new_flux)
@@ -496,7 +498,7 @@ fn main() {
         flux_history = stack(Axis(0), &[flux_history.view(),new_flux_to_save.view()]).unwrap();
         flux = new_flux;
 
-        let last_crit = criticality_history.last().unwrap().clone();
+        let last_crit = *criticality_history.last().unwrap();
         criticality_history.push(crit);
 
         iterations += 1;
