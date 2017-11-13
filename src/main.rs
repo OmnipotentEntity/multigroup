@@ -13,7 +13,8 @@ use std::fs::File;
 use std::path::Path;
 use std::env;
 use std::iter::Iterator;
-use ndarray::{Array, Array1, Array2, Array3, ArrayView, Axis, Shape, stack};
+use ndarray::{Array, Array1, Array2, Array3, Axis, stack};
+use ndarray_linalg::InverseInto;
 
 // This program is intended to solve a 1D slab reactor with a reflector.
 // Using 2 group techniques
@@ -209,18 +210,18 @@ fn update_source_from_flux(reactor: &ReactorParameters, flux: &Array2<f64>, sour
     // \Sigma_{fg',i-1} + \nu_{g'} \Sigma_{fg',i-1} \phi_{i-1} \right)
 
     let groups = source.len_of(Axis(0));
-    let segments: usize = source.strides()[0] as usize;
+    let segments = source.len_of(Axis(1));
 
     for (i, loc_source) in source.iter_mut().enumerate() {
         let left_contrib: f64;
         let segment_id = i % segments;
         let group_id = i / segments;
-        if (segment_id != 0) {
+        if segment_id != 0 {
             // S_N only has left contrib, so this is essentially the S_N formula
             let mut sum = 0.0;
-            for group in (0..groups) {
-                sum += 3.0 * flux[[group, segment_id]]     * reactor.nu_sigma_f[[group, segment_id - 1]]
-                           + flux[[group, segment_id - 1]] * reactor.nu_sigma_f[[group, segment_id - 1]];
+            for group in 0..groups {
+                sum += 3.0 * flux[(group, segment_id)]     * reactor.nu_sigma_f[(group, segment_id - 1)]
+                           + flux[(group, segment_id - 1)] * reactor.nu_sigma_f[(group, segment_id - 1)]
             }
             left_contrib = sum * delta / 8.0;
 
@@ -229,12 +230,12 @@ fn update_source_from_flux(reactor: &ReactorParameters, flux: &Array2<f64>, sour
         }
 
         let right_contrib: f64;
-        if (segment_id != segments - 1) {
+        if segment_id != segments - 1 {
             // S_0 only has left contrib, so this is essentially the S_N formula
             let mut sum = 0.0;
-            for group in (0..groups) {
-                sum += 3.0 * flux[[group, segment_id]] * reactor.nu_sigma_f[[group, segment_id]]
-                           + flux[[group, segment_id]] * reactor.nu_sigma_f[[group, segment_id + 1]];
+            for group in 0..groups {
+                sum += 3.0 * flux[(group, segment_id)] * reactor.nu_sigma_f[(group, segment_id)]
+                           + flux[(group, segment_id)] * reactor.nu_sigma_f[(group, segment_id + 1)]
             }
             right_contrib = sum * delta / 8.0;
 
@@ -244,11 +245,11 @@ fn update_source_from_flux(reactor: &ReactorParameters, flux: &Array2<f64>, sour
 
         // And then we just add up the contributions, and multiply by the group constant. The 1/k
         // constant will need to be multiplied later, as it must be calculated using this source.
-        *loc_source = reactor.chi[[group_id, segment_id]] * (left_contrib + right_contrib);
+        *loc_source = reactor.chi[(group_id, segment_id)] * (left_contrib + right_contrib);
     }
 }
 
-fn make_flux_from_source(reactor: &ReactorParameters, flux: &Array2<f64>, source: &Array2<f64>, delta: f64) -> (f64, Array2<f64>) {
+fn make_flux_from_source(reactor: &ReactorParameters, flux: &Array2<f64>, source: &Array2<f64>, inv_matrices: &Array3<f64>, delta: f64) -> (f64, Array2<f64>) {
     // The formula for this in LaTeX format is:
     // \left(\frac{D_i + D_{i-1}}{\Delta}\right)\phi_i - \frac{D_{i-1}}{\Delta}\phi_{i-1} -
     // \frac{D_i}{\Delta}\phi_{i+1} + \frac1{8}\Delta\left(3\phi_i \left(\Sigma_{r,i-1} +
@@ -270,13 +271,53 @@ fn make_flux_from_source(reactor: &ReactorParameters, flux: &Array2<f64>, source
     let mut res = flux.clone();
     let crit = 1.0;
 
-    let groups = source.len_of(Axis(0));
-    let segments: usize = source.strides()[0] as usize;
+    let groups = flux.len_of(Axis(0));
+    let segments = flux.len_of(Axis(1));
 
-    (crit, res)
+    for (i, loc_flux) in flux.iter().enumerate() {
+        // The general form of this system is A \phi = d, where A is the matrix made in
+        // make_group_matrices, and d is source + in scatter.
+        
+        // A is independent of flux and so has been precomputed and passed in.  So we have just
+        // \phi = A^{-1} d
+        
+        // d = \left( \frac{S_{i-1} + S_i}{2} \right) \Delta + \sum\limits_{g' \ne g}
+        // \left(\frac1{8} \Delta \left(3 \phi_{g',i} \left(\Sigma_{sg'g,i-1} +
+        // \Sigma_{sg'g,i}\right)\right) + \Sigma_{sg'g,i-1}\phi_{g',i-1} +
+        // \Sigma_{sg'g,i}\phi_{g',i+1}\right)
+
+        // So... we have to compute that...
+
+        // And what might seem familiar by now, there's both a left and a right contribution and
+        // they are as follows:
+
+        // d_{l,i} = \frac{\Delta}{2} S_i + \sum\limits_{g' \ne g} \left(\frac1{8} \Delta \left(3
+        // \phi_{g',i} \left(\Sigma_{sg'g,i-1} + \Sigma_{sg'g,i}\right)\right) +
+        // \Sigma_{sg'g,i-1}\phi_{g',i-1} + \Sigma_{sg'g,i}\phi_{g',i+1}\right)
+
+        let left_contrib: f64;
+        let segment_id = i & segments;
+        let group_id = i / segments;
+
+        if segment_id != 0 {
+
+        } else {
+
+        }
+        
+        let right_contrib: f64;
+        if segment_id != segment_id - 1 {
+
+        } else {
+
+        }
+
+
+    }
+
 }
 
-fn make_group_matrices(reactor: &ReactorParameters) -> Array3<f64> {
+fn make_group_matrices(reactor: &ReactorParameters, delta: f64) -> Array3<f64> {
     // In order to solve the system of equations we'll be solving it using a matrix inverse.  So
     // first we need to construct the matrix.
     // [[ b_0 c_0   0 ...   0]
@@ -291,16 +332,31 @@ fn make_group_matrices(reactor: &ReactorParameters) -> Array3<f64> {
     // c_i = \frac1{8}\Delta\Sigma_{r,i} - \frac{D_{i}}{\Delta}
     // Each being the components multiplied by \phi_{i-1}, \phi{i} and \phi{i+1} respectively.
 
+    // The good news is this matrix is actually independent of the flux and the source, so it only
+    // needs to be calculated once.
+
     let mut res: Array3<f64> = Array::zeros(
         (reactor.sigma_tr.len_of(Axis(0)), 
          reactor.sigma_tr.len_of(Axis(0)), 
          reactor.sigma_tr.len_of(Axis(1))));
 
-    for group in res.axis_iter_mut(Axis(2)) {
-        // group[[0,0]] = reactor.
-        // for i in (0..group.len_of(Axis(0))) {
+    let b_lr_contrib = |tr, r, d| 0.375 * r + 1.0 / (3.0 * tr * delta) + 0.5;
+    let edge_contrib = |tr, r, d| 0.125 * r - 1.0 / (3.0 * tr * delta);
+    let b = |tr1, tr2, r1, r2, d| b_lr_contrib(tr1, r1, d) + b_lr_contrib(tr2, r2, d) - 1.0;
 
-        // }
+    for (i, mut group) in res.axis_iter_mut(Axis(2)).enumerate() {
+        group[(0,0)] = b_lr_contrib(reactor.sigma_tr[(i, 0)], reactor.sigma_r[(i, 0)], delta);
+        group[(0,1)] = edge_contrib(reactor.sigma_tr[(i, 0)], reactor.sigma_r[(i, 0)], delta);
+        let size = group.len_of(Axis(0));
+
+        for j in 1..size-1 {
+            group[(j, j-1)] = edge_contrib(reactor.sigma_tr[(i, j-1)], reactor.sigma_r[(i, j-1)], delta);
+            group[(j, j-1)] = b(reactor.sigma_tr[(i, j-1)], reactor.sigma_tr[(i, j)], reactor.sigma_tr[(i, j-1)], reactor.sigma_r[(i, j)], delta);
+            group[(j, j-1)] = edge_contrib(reactor.sigma_tr[(i, j)], reactor.sigma_r[(i, j)], delta);
+        }
+
+        group[(size-1, size-2)] = edge_contrib(reactor.sigma_tr[(i, size-2)], reactor.sigma_r[(i, size-2)], delta);
+        group[(size-1, size-1)] = b_lr_contrib(reactor.sigma_tr[(i, size-1)], reactor.sigma_r[(i, size-1)], delta);
     }
 
     res
@@ -357,20 +413,27 @@ fn main() {
 
     let reactor = ReactorParameters{sigma_tr, sigma_a, sigma_r, nu_sigma_f, chi, sigma_s};
 
-    // Finally a "do-while" loop in order to update source and flux until they converge
-    // loop {
-    //     // First, update the source from the flux
-    //     update_source_from_flux(&reactor, &flux, &mut source, delta);
-    //     let source_to_save = source.clone().into_shape(arr3shape).unwrap();
-    //     source_history = stack(Axis(2), &[source_history.view(), source_to_save.view()]).unwrap();
+    let mut flux_matrices = make_group_matrices(&reactor, delta);
+    for mut group in flux_matrices.axis_iter_mut(Axis(0)) {
+        group = group.inv_into().unwrap();
+    }
 
-    //     // Next, update the flux from the source.
-    //     // This one does not modify in place because we have to reference flux from other groups
-    //     // in order to calculate the flux of a single group.  So we have to keep all data around
-    //     // until we're completely done with it.
-    //     let (criticality, new_flux) = make_flux_from_source(&reactor, &flux, &source, delta);
-    //     let new_flux_to_save = flux.clone().into_shape(arr3shape).unwrap();
-    //     flux_history = stack(Axis(2), &[flux_history.view(),new_flux_to_save.view()]).unwrap();
-    //     flux = new_flux;
-    // }
+    let inv_matrices = flux_matrices;
+
+    Finally a "do-while" loop in order to update source and flux until they converge
+    loop {
+        // First, update the source from the flux
+        update_source_from_flux(&reactor, &flux, &mut source, delta);
+        let source_to_save = source.clone().into_shape(arr3shape).unwrap();
+        source_history = stack(Axis(2), &[source_history.view(), source_to_save.view()]).unwrap();
+
+        // Next, update the flux from the source.
+        // This one does not modify in place because we have to reference flux from other groups
+        // in order to calculate the flux of a single group.  So we have to keep all data around
+        // until we're completely done with it.
+        let (criticality, new_flux) = make_flux_from_source(&reactor, &flux, &source, &inv_matrices, delta);
+        let new_flux_to_save = flux.clone().into_shape(arr3shape).unwrap();
+        flux_history = stack(Axis(2), &[flux_history.view(),new_flux_to_save.view()]).unwrap();
+        flux = new_flux;
+    }
 }
