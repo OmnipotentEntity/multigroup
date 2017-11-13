@@ -420,7 +420,7 @@ fn main() {
 
     let inv_matrices = flux_matrices;
 
-    Finally a "do-while" loop in order to update source and flux until they converge
+    // Finally a "do-while" loop in order to update source and flux until they converge
     loop {
         // First, update the source from the flux
         update_source_from_flux(&reactor, &flux, &mut source, delta);
