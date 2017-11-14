@@ -3,6 +3,6 @@
     "criticality_convergence" : 0.001,
     "core_thickness" : 300,
     "reflector_thickness" : 20,
-    "num_segments" : 3400,
-    "max_iterations" : 10000
+    "num_segments" : 34,
+    "max_iterations" : 10
 }
