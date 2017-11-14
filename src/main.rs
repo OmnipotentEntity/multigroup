@@ -248,6 +248,7 @@ fn update_source_from_flux(reactor: &ReactorParameters, flux: &Array2<f64>, sour
         // chi is a material property, so it also needs to have a flux weighted average at this
         // node point; however, because flux changes slowly and linearly, and chi is more or less
         // constant, we can just use the regular average.
+        // TODO: Make this "correct"
 
         let chi_mat = |g, s| { 
             let left_contrib = if s != 0 { reactor.chi[(g, s-1)] } else { 0.0 };
@@ -256,7 +257,7 @@ fn update_source_from_flux(reactor: &ReactorParameters, flux: &Array2<f64>, sour
             // If we have both parts, take the average, otherwise just give the part that we have.
             (left_contrib + right_contrib) / 
                 // this adds to 2.0 normally, taking the average. And 1.0 if we only have one part.
-                // should never have 1 parts.
+                // should never have 0 parts.
                 (if s != 0 { 1.0 } else { 0.0 } +
                  if s != segments - 1 { 1.0 } else { 0.0 })
         };
@@ -562,14 +563,14 @@ fn main() {
             break;
 
         } else {
-            //if iterations % 100 == 0 {
+            if iterations % 100 == 0 {
                 println!("{} iterations finished.", iterations);
                 println!("Criticality convergence = {}",
                     (last_crit / crit - 1.0).abs());
                 println!("Crit = {}", crit);
                 println!("Source convergence = {}",
                     max_source_diff(&source_history));
-            //}
+            }
         }
     }
 
@@ -577,11 +578,11 @@ fn main() {
 
     println!("{:?}", criticality_history);
 
-    // println!("----------");
+    println!("----------");
 
-    // println!("{}", source_history);
+    println!("{}", source_history);
 
-    // println!("----------");
+    println!("----------");
 
-    // println!("{}", flux_history);
+    println!("{}", flux_history);
 }
