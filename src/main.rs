@@ -356,6 +356,8 @@ fn make_flux_from_source(reactor: &ReactorParameters, flux: &Array2<f64>, source
             delta * source[(group_id, segment_id)] / crit;
     }
 
+    println!("d = {}", d_groups);
+
     // So now we have d, and we just need to compute phi.
 
     let mut new_flux = Array::zeros((0, segments));
@@ -489,8 +491,8 @@ fn main() {
     let sigma_s    = make_array3_from_mix(&core.sigma_s,    &reflector.sigma_s,    &parameters);
     let sigma_r    = gen_sigma_r(&sigma_a, &sigma_s);
 
-    let arr3shape = (1, sigma_tr.len_of(Axis(0)), sigma_tr.len_of(Axis(1)) + 1);
-    let arr2shape = (sigma_tr.len_of(Axis(0)), sigma_tr.len_of(Axis(1)) + 1);
+    let arr3shape = (1, sigma_tr.len_of(Axis(0)), sigma_tr.len_of(Axis(1)));
+    let arr2shape = (sigma_tr.len_of(Axis(0)), sigma_tr.len_of(Axis(1)));
 
     // Generate flat source and flux data
 
