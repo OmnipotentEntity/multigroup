@@ -212,9 +212,10 @@ fn update_source_from_flux(reactor: &ReactorParameters, flux: &Array2<f64>, sour
     let groups = source.len_of(Axis(0));
     let segments = source.len_of(Axis(1));
 
-    for (i, loc_source) in source.iter_mut().enumerate() {
-        let segment_id = i % segments;
-        let group_id = i / segments;
+    let mut source_mesh = Array::zeros(segments + 1);
+
+    for (i, loc_source) in source_mesh.iter_mut().enumerate() {
+        let segment_id = i % (segments + 1);
 
         let left_contrib: f64 = if segment_id != 0 {
             // S_N only has left contrib, so this is essentially the S_N formula
@@ -224,44 +225,57 @@ fn update_source_from_flux(reactor: &ReactorParameters, flux: &Array2<f64>, sour
                            + flux[(group, segment_id - 1)] * reactor.nu_sigma_f[(group, segment_id - 1)]
             }
 
-            sum * delta / 8.0
-        } else {
-            0.0
-        };
+            sum
+        } else { 0.0 };
 
-        let right_contrib: f64 = if segment_id != segments - 1 {
-            // S_0 only has left contrib, so this is essentially the S_N formula
+        let right_contrib: f64 = if segment_id != segments {
+            // S_0 only has left contrib, so this is essentially the S_0 formula
             let mut sum = 0.0;
             for group in 0..groups {
-                sum += 3.0 * flux[(group, segment_id)] * reactor.nu_sigma_f[(group, segment_id)]
+                sum += 3.0 * flux[(group, segment_id)]     * reactor.nu_sigma_f[(group, segment_id)]
                            + flux[(group, segment_id + 1)] * reactor.nu_sigma_f[(group, segment_id)]
             }
 
-            sum * delta / 8.0
-        } else {
-            0.0
-        };
+            sum
+        } else { 0.0 };
 
-        // And then we just add up the contributions, and multiply by the group constant. The 1/k
-        // constant will need to be multiplied later, as it must be calculated using this source.
+        // And then we just add up the contributions, and multiply by the group constant.
 
-        // chi is a material property, so it also needs to have a flux weighted average at this
-        // node point; however, because flux changes slowly and linearly, and chi is more or less
-        // constant, we can just use the regular average.
-        // TODO: Make this "correct"
+        *loc_source =  (left_contrib + right_contrib) * delta / 8.0
+    }
 
-        let chi_mat = |g, s| { 
-            let left_contrib = if s != 0 { reactor.chi[(g, s-1)] } else { 0.0 };
-            let right_contrib = if s != segments - 1 { reactor.chi[(g, s)] } else { 0.0 };
+    // Next we iterate over the source mesh and take the average of each pair to get the source
+    // blocks.
 
-            // If we have both parts, take the average, otherwise just give the part that we have.
-            (left_contrib + right_contrib) / 
-                // this adds to 2.0 normally, taking the average. And 1.0 if we only have one part.
-                // should never have 0 parts.
-                (if s != 0 { 1.0 } else { 0.0 } +
-                 if s != segments - 1 { 1.0 } else { 0.0 })
-        };
-        *loc_source = chi_mat(group_id, segment_id) * (left_contrib + right_contrib);
+    let mut source_blocks = Array::zeros((segments));
+
+    let mut next_iter = source_mesh.iter();
+    next_iter.next();
+
+    for ((mesh, next), block) in source_mesh.iter().zip(next_iter).zip(source_blocks.iter_mut()) {
+        *block = (mesh + next) / 2.0;
+    }
+
+    // chi is a material property, so it also needs to have a flux weighted average at this
+    // node point; however, because flux changes slowly and linearly, and chi is more or less
+    // constant, we can just use the regular average.
+    // TODO: Make this "correct"
+
+    let chi_mat = |g, s| {
+        let (l, d1) = if s != 0 { (reactor.chi[(g, s-1)], 1.0) } else { (0.0, 0.0) };
+        let (r, d2) = if s != segments - 1 { (reactor.chi[(g, s)], 1.0) } else { (0.0, 0.0) };
+
+        // If we have both parts, take the average, otherwise just give the part that we have.
+        (l + r) / (d1 + d2)
+        // d1 + d2 adds to 2.0 normally, taking the average. And 1.0 if we only have one part.
+        // should never have 0 parts.
+    };
+
+    // Finally, we use the source blocks to update the source.
+    for (i, loc_source) in source.iter_mut().enumerate() {
+        let segment_id = i % segments;
+        let group_id = i / segments;
+        *loc_source = chi_mat(group_id, segment_id) * source_blocks[segment_id];
     }
 }
 
@@ -334,8 +348,8 @@ fn make_flux_from_source(reactor: &ReactorParameters, flux: &Array2<f64>, source
             let left_flux = flux.subview(Axis(1), segment_id-1);
             let center_flux = flux.subview(Axis(1), segment_id);
 
-            delta * (0.375 * sum_over_g_ne_g(left_inscatter, center_flux) +
-                 0.125 * sum_over_g_ne_g(left_inscatter, left_flux))
+            0.375 * sum_over_g_ne_g(left_inscatter, center_flux) +
+            0.125 * sum_over_g_ne_g(left_inscatter, left_flux)
         } else {
             0.0
         };
@@ -346,14 +360,20 @@ fn make_flux_from_source(reactor: &ReactorParameters, flux: &Array2<f64>, source
             let center_flux = flux.subview(Axis(1), segment_id);
             let right_flux = flux.subview(Axis(1), segment_id+1);
 
-            delta * (0.375 * sum_over_g_ne_g(center_inscatter, center_flux) +
-                 0.125 * sum_over_g_ne_g(center_inscatter, right_flux))
+            0.375 * sum_over_g_ne_g(center_inscatter, center_flux) +
+            0.125 * sum_over_g_ne_g(center_inscatter, right_flux)
         } else {
             0.0
         };
 
-        d_groups[(group_id, segment_id)] = left_contrib + right_contrib +
-            delta * source[(group_id, segment_id)] / crit;
+        d_groups[(group_id, segment_id)] = left_contrib + right_contrib;
+
+        let source_term =
+            if segment_id != 0 { source[(group_id, segment_id - 1)] } else { 0.0 } +
+            if segment_id != segments - 1 { source[(group_id, segment_id)] } else { 0.0 };
+
+        d_groups[(group_id, segment_id)] *= delta;
+        d_groups[(group_id, segment_id)] += source_term / crit / 2.0;
     }
 
     // So now we have d, and we just need to compute phi.
@@ -364,15 +384,6 @@ fn make_flux_from_source(reactor: &ReactorParameters, flux: &Array2<f64>, source
                             .zip(d_groups.axis_iter(Axis(0))) {
         let new_group_flux = inv.dot(&d).into_shape((1, segments)).unwrap();
         new_flux = stack(Axis(0), &[new_flux.view(), new_group_flux.view()]).unwrap();
-    }
-
-    // Finally, we use the old flux and new flux to calculate the normalization factor.
-
-    let norm_factor = new_flux.iter().sum::<f64>() / flux.iter().sum::<f64>();
-
-    // And normalize
-    for i in new_flux.iter_mut() {
-        *i /= norm_factor;
     }
 
     new_flux
@@ -409,29 +420,36 @@ fn make_group_matrices(reactor: &ReactorParameters, delta: f64) -> Array3<f64> {
     let b = |tr1, tr2, a1, a2, r1, r2| combine_b(b_lr_contrib(tr1, a1, r1), b_lr_contrib(tr2, a2, r2));
 
     for (i, mut group) in res.axis_iter_mut(Axis(0)).enumerate() {
-        group[(0,0)] = b_lr_contrib(reactor.sigma_tr[(i, 0)],
+        group[(0,0)] = b_lr_contrib(
+            reactor.sigma_tr[(i, 0)],
             reactor.sigma_a[(i, 0)],
             reactor.sigma_r[(i, 0)]);
-        group[(0,1)] = edge_contrib(reactor.sigma_tr[(i, 0)],
+        group[(0,1)] = edge_contrib(
+            reactor.sigma_tr[(i, 0)],
             reactor.sigma_a[(i, 0)],
             reactor.sigma_r[(i, 0)]);
 
         for j in 1..size-1 {
-            group[(j, j-1)] = edge_contrib(reactor.sigma_tr[(i, j-1)],
+            group[(j, j-1)] = edge_contrib(
+                reactor.sigma_tr[(i, j-1)],
                 reactor.sigma_a[(i, j-1)],
                 reactor.sigma_r[(i, j-1)]);
-            group[(j, j)] = b(reactor.sigma_tr[(i, j-1)], reactor.sigma_tr[(i, j)],
+            group[(j, j)] = b(
+                reactor.sigma_tr[(i, j-1)], reactor.sigma_tr[(i, j)],
                 reactor.sigma_a[(i, j-1)], reactor.sigma_a[(i, j)],
                 reactor.sigma_r[(i, j-1)], reactor.sigma_r[(i, j)]);
-            group[(j, j+1)] = edge_contrib(reactor.sigma_tr[(i, j)],
+            group[(j, j+1)] = edge_contrib(
+                reactor.sigma_tr[(i, j)],
                 reactor.sigma_a[(i, j)],
                 reactor.sigma_r[(i, j)]);
         }
 
-        group[(size-1, size-2)] = edge_contrib(reactor.sigma_tr[(i, size-2)],
+        group[(size-1, size-2)] = edge_contrib(
+            reactor.sigma_tr[(i, size-2)],
             reactor.sigma_a[(i, size-2)],
             reactor.sigma_r[(i, size-2)]);
-        group[(size-1, size-1)] = b_lr_contrib(reactor.sigma_tr[(i, size-2)],
+        group[(size-1, size-1)] = b_lr_contrib(
+            reactor.sigma_tr[(i, size-2)],
             reactor.sigma_a[(i, size-2)],
             reactor.sigma_r[(i, size-2)]);
     }
@@ -489,17 +507,19 @@ fn main() {
     let sigma_s    = make_array3_from_mix(&core.sigma_s,    &reflector.sigma_s,    &parameters);
     let sigma_r    = gen_sigma_r(&sigma_a, &sigma_s);
 
-    let arr3shape = (1, sigma_tr.len_of(Axis(0)), sigma_tr.len_of(Axis(1)) + 1);
-    let arr2shape = (sigma_tr.len_of(Axis(0)), sigma_tr.len_of(Axis(1)) + 1);
+    let arr3shape = (1, sigma_tr.len_of(Axis(0)), sigma_tr.len_of(Axis(1)));
+    let arr3mesh = (1, sigma_tr.len_of(Axis(0)), sigma_tr.len_of(Axis(1)) + 1);
+    let arr2shape = (sigma_tr.len_of(Axis(0)), sigma_tr.len_of(Axis(1)));
+    let arr2mesh = (sigma_tr.len_of(Axis(0)), sigma_tr.len_of(Axis(1)) + 1);
 
     // Generate flat source and flux data
 
     let mut criticality_history = vec![1.0];
     let mut source_history = Array::from_elem(arr3shape, 1.0);
-    let mut flux_history   = Array::from_elem(arr3shape, 1.0);
+    let mut flux_history   = Array::from_elem(arr3mesh, 1.0);
 
     let mut source: Array2<f64> = Array::from_elem(arr2shape, 1.0);
-    let mut flux:   Array2<f64> = Array::from_elem(arr2shape, 1.0);
+    let mut flux:   Array2<f64> = Array::from_elem(arr2mesh, 1.0);
 
     let mut iterations = 0;
     let mut crit = 1.0;
@@ -526,20 +546,20 @@ fn main() {
         let source_to_save = source.clone().into_shape(arr3shape).unwrap();
         source_history = stack(Axis(0), &[source_history.view(), source_to_save.view()]).unwrap();
 
+        crit = make_crit_from_source(&source_history, crit);
+
+        let last_crit = *criticality_history.last().unwrap();
+        criticality_history.push(crit);
+
         // Next, update the flux from the source.
         // This one does not modify in place because we have to reference flux from other groups
         // in order to calculate the flux of a single group.  So we have to keep all data around
         // until we're completely done with it.
         let new_flux = make_flux_from_source(&reactor, &flux, &source, &inv_matrices, crit, delta);
         //println!("{}", new_flux);
-        let new_flux_to_save = flux.clone().into_shape(arr3shape).unwrap();
+        let new_flux_to_save = flux.clone().into_shape(arr3mesh).unwrap();
         flux_history = stack(Axis(0), &[flux_history.view(),new_flux_to_save.view()]).unwrap();
         flux = new_flux;
-
-        crit = make_crit_from_source(&source_history, crit);
-
-        let last_crit = *criticality_history.last().unwrap();
-        criticality_history.push(crit);
 
         iterations += 1;
 
