@@ -17,6 +17,7 @@ use std::env;
 use std::iter::Iterator;
 use ndarray::{Array, Array1, Array2, Array3, ArrayView1, Axis, stack};
 use ndarray_linalg::InverseInto;
+use serde::de::DeserializeOwned;
 
 // This program is intended to solve a 1D slab reactor with a reflector.
 // Using 2 group techniques
@@ -99,28 +100,13 @@ struct ReactorParameters {
     sigma_s: Array3<f64>
 }
 
-// Reads json data from a file and parses it into a Material struct
-fn read_mat_from_file<P: AsRef<Path>>(path: P) -> Result <Material, Box<Error>> {
+// Reads json data from a file and parses it into a struct
+fn read_from_json_file<P: AsRef<Path>, R: DeserializeOwned>(path: P) -> Result<R, Box<Error>> {
     // Open the file in read-only mode.
     let file = File::open(path)?;
 
-    // Read the JSON contents of the file as a instance of Material.
-    let mat = serde_json::from_reader(file)?;
-
-    // Return the Material
-    Ok(mat)
-}
-
-// Reads json data from a file and parses it into a Parameters struct
-fn read_par_from_file<P: AsRef<Path>>(path: P) -> Result <Parameters, Box<Error>> {
-    // Open the file in read-only mode.
-    let file = File::open(path)?;
-
-    // Read the JSON contents of the file as a instance of Parameters.
-    let par = serde_json::from_reader(file)?;
-
-    // Return the Parameters
-    Ok(par)
+    // Read the JSON contents of the file as a instance of R
+    Ok(serde_json::from_reader(file)?)
 }
 
 // This function exists to not repeat functional code
@@ -476,9 +462,9 @@ fn main() {
     let core_filename = env::args().nth(2).expect(USAGE);
     let reflector_filename = env::args().nth(3).expect(USAGE);
 
-    let parameters = read_par_from_file(&parameters_filename).unwrap();
-    let core = read_mat_from_file(&core_filename).unwrap();
-    let reflector = read_mat_from_file(&reflector_filename).unwrap();
+    let parameters: Parameters = read_from_json_file(&parameters_filename).unwrap();
+    let core: Material = read_from_json_file(&core_filename).unwrap();
+    let reflector: Material = read_from_json_file(&reflector_filename).unwrap();
 
     // Double check data for sanity
     assert!(parameters.core_thickness > 0.0, COREERR);
