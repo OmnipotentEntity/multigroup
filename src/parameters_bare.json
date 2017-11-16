@@ -1,0 +1,8 @@
+{
+    "source_convergence" : 0.0001,
+    "criticality_convergence" : 0.0001,
+    "core_thickness" : 298,
+    "reflector_thickness" : 1,
+    "num_segments" : 3000,
+    "max_iterations" : 10000
+}
