@@ -247,7 +247,7 @@ fn update_source_from_flux(reactor: &ReactorParameters, flux: &Array2<f64>, sour
     // Next we iterate over the source mesh and take the average of each pair to get the source
     // blocks.
 
-    let mut source_blocks = Array::zeros((segments));
+    let mut source_blocks = Array::zeros(segments);
 
     let mut next_iter = source_mesh.iter();
     next_iter.next();
@@ -582,15 +582,13 @@ fn main() {
                 parameters.source_convergence);
             break;
 
-        } else {
-            if iterations % 100 == 0 {
-                println!("{} iterations finished.", iterations);
-                println!("Criticality convergence = {}",
+        } else if iterations % 100 == 0 {
+            println!("{} iterations finished.", iterations);
+            println!("Criticality convergence = {}",
                     (last_crit / crit - 1.0).abs());
-                println!("Crit = {}", crit);
-                println!("Source convergence = {}",
+            println!("Crit = {}", crit);
+            println!("Source convergence = {}",
                     max_source_diff(&source_history));
-            }
         }
     }
 

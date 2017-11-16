@@ -4,5 +4,5 @@
     "core_thickness" : 300,
     "reflector_thickness" : 20,
     "num_segments" : 680,
-    "max_iterations" : 10
+    "max_iterations" : 10000
 }
