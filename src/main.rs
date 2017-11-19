@@ -514,12 +514,10 @@ fn main() {
 
     println!("Generating matrix");
     let mut flux_matrices = make_group_matrices(&reactor, delta);
-    //println!("{}", flux_matrices);
     println!("Inverting matrix");
     for group in flux_matrices.axis_iter_mut(Axis(0)) {
         group.inv_into().unwrap();
     }
-    //println!("{}", flux_matrices);
 
     let inv_matrices = flux_matrices;
 
@@ -528,7 +526,6 @@ fn main() {
     loop {
         // First, update the source from the flux
         update_source_from_flux(&reactor, &flux, &mut source, delta);
-        //println!("{}", source);
         let source_to_save = source.clone().into_shape(arr3shape).unwrap();
         source_history = stack(Axis(0), &[source_history.view(), source_to_save.view()]).unwrap();
 
@@ -542,7 +539,6 @@ fn main() {
         // in order to calculate the flux of a single group.  So we have to keep all data around
         // until we're completely done with it.
         let new_flux = make_flux_from_source(&reactor, &flux, &source, &inv_matrices, crit, delta);
-        //println!("{}", new_flux);
         let new_flux_to_save = flux.clone().into_shape(arr3mesh).unwrap();
         flux_history = stack(Axis(0), &[flux_history.view(),new_flux_to_save.view()]).unwrap();
         flux = new_flux;
@@ -554,6 +550,7 @@ fn main() {
             println!("Converged after {} iterations.", iterations);
             println!("Criticality convergence = {}",
                 (last_crit / crit - 1.0).abs());
+            println!("Criticality = {}", crit);
             println!("Source convergence = {}",
                 max_source_diff(&source_history));
             break;
@@ -563,6 +560,7 @@ fn main() {
             println!("Criticality convergence = {}, {} expected",
                 (last_crit / crit - 1.0).abs(),
                 parameters.criticality_convergence);
+            println!("Criticality = {}", crit);
             println!("Source convergence = {}, {} expected",
                 max_source_diff(&source_history),
                 parameters.source_convergence);
@@ -572,7 +570,7 @@ fn main() {
             println!("{} iterations finished.", iterations);
             println!("Criticality convergence = {}",
                     (last_crit / crit - 1.0).abs());
-            println!("Crit = {}", crit);
+            println!("Criticality = {}", crit);
             println!("Source convergence = {}",
                     max_source_diff(&source_history));
         }
